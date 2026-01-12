@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import IO, TYPE_CHECKING, cast
 
 from docx.document import Document
+from docx.opc.constants import CONTENT_TYPE as CT
 from docx.opc.constants import RELATIONSHIP_TYPE as RT
 from docx.parts.comments import CommentsPart
 from docx.parts.hdrftr import FooterPart, HeaderPart
@@ -111,7 +112,37 @@ class DocumentPart(StoryPart):
     def save(self, path_or_stream: str | IO[bytes]):
         """Save this document to `path_or_stream`, which can be either a path to a
         filesystem location (a string) or a file-like object."""
+        # Normalize macro-enabled content type to standard Word document type
+        # since we don't preserve VBA macros
+        if self._content_type == CT.WML_DOCUMENT_MACRO_ENABLED_MAIN:
+            self._content_type = CT.WML_DOCUMENT_MAIN
+            # Remove VBA and ActiveX control relationships
+            self._remove_macro_relationships()
         self.package.save(path_or_stream)
+
+    def _remove_macro_relationships(self):
+        """Remove VBA project and ActiveX control relationships from the document part."""
+        # Relationship types that should be removed when converting from DOCM to DOCX
+        macro_reltypes = (
+            "http://schemas.microsoft.com/office/2006/relationships/vbaProject",
+            "http://schemas.microsoft.com/office/2006/relationships/wordVbaData",
+            "http://schemas.openxmlformats.org/officeDocument/2006/relationships/control",
+        )
+        # Find and remove relationships of these types
+        rids_to_remove = [
+            rel.rId for rel in self.rels.values()
+            if rel.reltype in macro_reltypes
+        ]
+
+        # Remove control elements from document XML that reference these relationships
+        for rId in rids_to_remove:
+            # Find and remove any <w:control> elements that reference this rId
+            control_elements = self._element.xpath(f'.//w:control[@r:id="{rId}"]')
+            for control_elem in control_elements:
+                control_elem.getparent().remove(control_elem)
+
+            # Remove the relationship
+            del self.rels[rId]
 
     @property
     def settings(self) -> Settings:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import IO, TYPE_CHECKING, cast
 
 from docx.document import Document
@@ -109,16 +110,68 @@ class DocumentPart(StoryPart):
             self.relate_to(numbering_part, RT.NUMBERING)
             return numbering_part
 
-    def save(self, path_or_stream: str | IO[bytes]):
+    def save(self, path_or_stream: str | IO[bytes], preserve_macros: bool | None = None):
         """Save this document to `path_or_stream`, which can be either a path to a
-        filesystem location (a string) or a file-like object."""
-        # Normalize macro-enabled content type to standard Word document type
-        # since we don't preserve VBA macros
-        if self._content_type == CT.WML_DOCUMENT_MACRO_ENABLED_MAIN:
+        filesystem location (a string) or a file-like object.
+
+        Args:
+            path_or_stream: File path (string) or file-like object to save to
+            preserve_macros: If True, preserves VBA macros when saving DOCM files.
+                           If False, strips macros and converts to DOCX format.
+                           If None (default), auto-detects based on file extension:
+                           - .docm extension -> preserve macros
+                           - .docx extension or no extension -> strip macros
+
+        Note:
+            When stripping macros from a DOCM file, if saving to a path with .docm
+            extension, the extension will be automatically changed to .docx to match
+            the content type and ensure Word can open the file correctly.
+        """
+        # Determine whether to preserve macros
+        should_preserve = self._should_preserve_macros(path_or_stream, preserve_macros)
+
+        # Only strip macros if we have a macro-enabled document and shouldn't preserve
+        will_strip_macros = (
+            self._content_type == CT.WML_DOCUMENT_MACRO_ENABLED_MAIN and not should_preserve
+        )
+
+        if will_strip_macros:
+            # Convert to standard Word document type
             self._content_type = CT.WML_DOCUMENT_MAIN
-            # Remove VBA and ActiveX control relationships
+            # Remove VBA and ActiveX control relationships and parts
             self._remove_macro_relationships()
+            self._remove_vba_parts()
+
+            # If saving to a file path with .docm extension, correct it to .docx
+            # to match the content type (Word won't open files with mismatched extensions)
+            if isinstance(path_or_stream, str) and path_or_stream.lower().endswith('.docm'):
+                path_or_stream = path_or_stream[:-5] + '.docx'
+
         self.package.save(path_or_stream)
+
+    def _should_preserve_macros(
+        self, path_or_stream: str | IO[bytes], preserve_macros: bool | None
+    ) -> bool:
+        """Determine whether to preserve VBA macros based on file extension or explicit flag.
+
+        Args:
+            path_or_stream: Target file path or stream
+            preserve_macros: Explicit preserve flag (overrides auto-detection)
+
+        Returns:
+            True if macros should be preserved, False if they should be stripped
+        """
+        # If explicitly specified, use that value
+        if preserve_macros is not None:
+            return preserve_macros
+
+        # For file-like objects, default to stripping (safer)
+        if not isinstance(path_or_stream, str):
+            return False
+
+        # For file paths, detect based on extension
+        _, ext = os.path.splitext(path_or_stream)
+        return ext.lower() == ".docm"
 
     def _remove_macro_relationships(self):
         """Remove VBA project and ActiveX control relationships from the document part."""
@@ -143,6 +196,56 @@ class DocumentPart(StoryPart):
 
             # Remove the relationship
             del self.rels[rId]
+
+    def _remove_vba_parts(self):
+        """Remove VBA-related parts from the package.
+
+        This removes the actual binary VBA parts and other macro-related parts,
+        not just the relationships to them.
+        """
+        assert self.package is not None
+
+        # VBA-related content types to remove
+        vba_content_types = (
+            "application/vnd.ms-word.vbaProject",
+            "application/vnd.ms-word.vbaData+xml",
+            "application/vnd.ms-office.activeX",
+            "application/vnd.ms-office.activeX+xml",
+        )
+
+        # VBA-related partname patterns
+        vba_partname_patterns = (
+            "/word/vbaProject.bin",
+            "/word/vbaData.xml",
+        )
+
+        # Collect parts to remove
+        parts_to_remove = []
+        for part in self.package.parts:
+            # Check by content type
+            if part.content_type in vba_content_types:
+                parts_to_remove.append(part)
+            # Check by partname pattern
+            elif any(str(part.partname) == pattern for pattern in vba_partname_patterns):
+                parts_to_remove.append(part)
+
+        # Remove the parts from package
+        # Note: We need to remove them from the package's internal tracking
+        # This is tricky because the package builds its parts list dynamically via iter_parts()
+        # We'll remove relationships pointing to these parts from all sources
+        for part_to_remove in parts_to_remove:
+            # Remove relationships from package level
+            for rel in list(self.package.rels.values()):
+                if not rel.is_external and rel.target_part == part_to_remove:
+                    del self.package.rels[rel.rId]
+
+            # Remove relationships from all other parts
+            for part in self.package.parts:
+                if part == part_to_remove:
+                    continue
+                for rel in list(part.rels.values()):
+                    if not rel.is_external and rel.target_part == part_to_remove:
+                        del part.rels[rel.rId]
 
     @property
     def settings(self) -> Settings:

@@ -195,13 +195,21 @@ class Document(ElementProxy):
         """The |DocumentPart| object of this document."""
         return self._part
 
-    def save(self, path_or_stream: str | IO[bytes]):
+    def save(self, path_or_stream: str | IO[bytes], preserve_macros: bool | None = None):
         """Save this document to `path_or_stream`.
 
         `path_or_stream` can be either a path to a filesystem location (a string) or a
         file-like object.
+
+        Args:
+            path_or_stream: File path (string) or file-like object to save to
+            preserve_macros: If True, preserves VBA macros when saving DOCM files.
+                           If False, strips macros and converts to DOCX format.
+                           If None (default), auto-detects based on file extension:
+                           - .docm extension -> preserve macros
+                           - .docx extension or no extension -> strip macros
         """
-        self._part.save(path_or_stream)
+        self._part.save(path_or_stream, preserve_macros=preserve_macros)
 
     @property
     def sections(self) -> Sections:

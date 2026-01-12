@@ -41,6 +41,17 @@ class DescribeDocument:
         with pytest.raises(ValueError, match="file 'foobar.xlsx' is not a Word file,"):
             DocumentFactoryFn("foobar.xlsx")
 
+    def it_opens_a_docm_file(self, Package_: Mock, document_: Mock):
+        """Test that DOCM (macro-enabled) files can be opened."""
+        document_part = Package_.open.return_value.main_document_part
+        document_part.document = document_
+        document_part.content_type = CT.WML_DOCUMENT_MACRO_ENABLED_MAIN
+
+        document = DocumentFactoryFn("foobar.docm")
+
+        Package_.open.assert_called_once_with("foobar.docm")
+        assert document is document_
+
     # -- fixtures --------------------------------------------------------------------------------
 
     @pytest.fixture

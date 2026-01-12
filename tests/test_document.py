@@ -183,7 +183,7 @@ class DescribeDocument:
 
         document.save("foobar.docx")
 
-        document_part_.save.assert_called_once_with("foobar.docx")
+        document_part_.save.assert_called_once_with("foobar.docx", preserve_macros=None)
 
     def it_provides_access_to_the_comments(self, document_part_: Mock, comments_: Mock):
         document_part_.comments = comments_

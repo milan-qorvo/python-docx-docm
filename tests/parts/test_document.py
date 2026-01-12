@@ -326,6 +326,113 @@ class DescribeDocumentPart:
         relate_to_.assert_called_once_with(document_part, styles_part_, RT.STYLES)
         assert styles_part is styles_part_
 
+    # -- DOCM support tests ----------------------------------------------------------------------
+
+    def it_determines_macro_preservation_based_on_file_extension(self, package_: Mock):
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+
+        # .docm extension should preserve macros
+        assert document_part._should_preserve_macros("file.docm", None) is True
+        # .DOCM (case insensitive) should preserve
+        assert document_part._should_preserve_macros("file.DOCM", None) is True
+        # .docx extension should not preserve
+        assert document_part._should_preserve_macros("file.docx", None) is False
+        # No extension should not preserve
+        assert document_part._should_preserve_macros("file", None) is False
+
+    def it_respects_explicit_preserve_macros_flag(self, package_: Mock):
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+
+        # Explicit True overrides extension
+        assert document_part._should_preserve_macros("file.docx", True) is True
+        # Explicit False overrides extension
+        assert document_part._should_preserve_macros("file.docm", False) is False
+
+    def it_defaults_to_not_preserving_for_streams(self, package_: Mock):
+        from io import BytesIO
+
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+
+        stream = BytesIO()
+        # Streams default to not preserving (safer)
+        assert document_part._should_preserve_macros(stream, None) is False
+        # But can be explicitly overridden
+        assert document_part._should_preserve_macros(stream, True) is True
+
+    def it_strips_macros_when_saving_docm_to_docx(self, package_: Mock):
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+        # Mock the VBA parts list
+        package_.parts = []
+
+        document_part.save("output.docx")
+
+        # Content type should be changed to standard DOCX
+        assert document_part._content_type == CT.WML_DOCUMENT_MAIN
+        # Package save should be called with the path
+        package_.save.assert_called_once_with("output.docx")
+
+    def it_preserves_macros_when_saving_docm_to_docm(self, package_: Mock):
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+
+        document_part.save("output.docm")
+
+        # Content type should remain macro-enabled
+        assert document_part._content_type == CT.WML_DOCUMENT_MACRO_ENABLED_MAIN
+        package_.save.assert_called_once_with("output.docm")
+
+    def it_auto_corrects_extension_when_stripping_with_docm_path(self, package_: Mock):
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"),
+            CT.WML_DOCUMENT_MACRO_ENABLED_MAIN,
+            element("w:document"),
+            package_,
+        )
+        # Mock the VBA parts list
+        package_.parts = []
+
+        # Request save to .docm with explicit preserve=False
+        document_part.save("output.docm", preserve_macros=False)
+
+        # Should auto-correct to .docx to match content type
+        package_.save.assert_called_once_with("output.docx")
+
+    def it_does_not_strip_macros_from_regular_docx_files(self, package_: Mock):
+        # Regular DOCX file (not macro-enabled)
+        document_part = DocumentPart(
+            PackURI("/word/document.xml"), CT.WML_DOCUMENT, element("w:document"), package_
+        )
+
+        document_part.save("output.docx")
+
+        # Content type should remain standard DOCX
+        assert document_part._content_type == CT.WML_DOCUMENT
+        package_.save.assert_called_once_with("output.docx")
+
     # -- fixtures --------------------------------------------------------------------------------
 
     @pytest.fixture
